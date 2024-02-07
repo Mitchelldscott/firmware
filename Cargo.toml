@@ -1,0 +1,33 @@
+[package]
+name = "firmware"
+version = "0.1.0"
+authors = ["Mitchell D Scott <misc4432@colorado.edu>"]
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rtic = "1.0"
+embedded-hal = "0.2"
+# Remove me if you don't want logging.
+log = "0.4"
+pin-utils = "0.1"
+# imxrt-log = { version = "0.1", features = ["usbd", "log"]}
+usb-device = { version = "0.2", features = ["test-class-high-speed"] }
+usbd-hid = "0.6"
+teensy4-panic = "0.2"
+usbd-serial = "0.2.0"
+imxrt-usbd = "0.2.2"
+rid = { path = "../rid" }
+
+[dependencies.teensy4-bsp]
+version = "0.4"
+features = [
+    # Use the BSP's runtime. This lets you write your
+    # `main()` function.
+    "rt",
+]
+
+# Don't optimize build dependencies, like proc macros.
+# Helps with build times.
+[profile.release.build-override]
+opt-level = 0

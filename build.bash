@@ -1,0 +1,1 @@
+cargo objcopy --verbose --release -- -O ihex firmware.hex
