@@ -9,13 +9,13 @@
  *
  *
  *
- *  RTIC firmware & USB interface 
+ *  RTIC firmware & USB interface
  * Manages peripheral IO and the task graph
  * (ethernet coming soon?)
- * 
+ *
  ********************************************************************************/
 //!
-//! 
+//!
 //!
 //! # Building
 //!
@@ -45,13 +45,13 @@ mod app {
         device::{UsbDevice, UsbDeviceBuilder, UsbDeviceState, UsbVidPid},
     };
 
-    use usbd_hid::{
-        descriptor::{generator_prelude::*},
-        hid_class::HIDClass,
-    };
+    use usbd_hid::{descriptor::generator_prelude::*, hid_class::HIDClass};
 
-    use firmware::{SystemState};
-    use rid::{PTPStamp, Duration, RID_PACKET_SIZE, RIDReport};
+    use firmware::SystemState;
+    use rid::{
+        ptp::{Duration, TimeStamp},
+        RIDReport, RID_PACKET_SIZE,
+    };
 
     #[gen_hid_descriptor(
         (collection = 0x01, usage = 0x01, usage_page = 0xff00) = {
@@ -66,7 +66,7 @@ mod app {
     /// Change me if you want to play with a full-speed USB device.
     const SPEED: Speed = Speed::High;
     const VID_PID: UsbVidPid = UsbVidPid(0x1331, 0x0001);
-    const PRODUCT: &str="Dyse Industries RTIC Firmware";
+    const PRODUCT: &str = "Dyse Industries RTIC Firmware";
 
     /// How frequently we push updates to usb host
     const GPT_UPDATE_INTERVAL_US: u32 = 1_000;
@@ -75,7 +75,6 @@ mod app {
     const TICK_TO_MS: f32 = 1_000.0 / board::PERCLK_FREQUENCY as f32;
     const TICK_TO_US: f32 = 1_000.0 * TICK_TO_MS;
     const PIT_DELAY_MS: u32 = (0.5 / TICK_TO_MS) as u32;
-
 
     /// This allocation is shared across all USB endpoints. It needs to be large
     /// enough to hold the maximum packet size for *all* endpoints. If you start
@@ -88,7 +87,6 @@ mod app {
     // use core::{iter::Cycle, slice::Iter};
 
     type Bus = BusAdapter;
-
 
     #[shared]
     struct Shared {
@@ -109,7 +107,7 @@ mod app {
         usb_hid: HIDClass<'static, Bus>,
         usb_device: UsbDevice<'static, Bus>,
         pit: bsp::hal::pit::Pit<2>,
-        ptp_stamp: PTPStamp,
+        ptp_stamp: TimeStamp,
     }
 
     #[init(local = [bus: Option<UsbBusAllocator<Bus>> = None])]
@@ -153,7 +151,7 @@ mod app {
             .max_packet_size_0(64)
             .build();
 
-        let ptp_stamp = PTPStamp::new(0,0,0,0);
+        let ptp_stamp = TimeStamp::new(0, 0, 0, 0);
 
         (
             Shared {
@@ -187,18 +185,20 @@ mod app {
 
     #[task(binds = PIT, local = [builtin_led, system_led, rt_task_led, pit, loop_timer: u32 = 0], shared = [system_time, usb_state, rt_task_state, system_state, system_status_report], priority = 1)]
     fn system_control(mut ctx: system_control::Context) {
-
         let mut ticks = 0;
 
-        while ctx.local.pit.is_elapsed() { // this while feels unnecessary but since everyone else is doing it I'll leave it for now
+        while ctx.local.pit.is_elapsed() {
+            // this while feels unnecessary but since everyone else is doing it I'll leave it for now
             ticks = ctx.local.pit.current_timer_value();
             ctx.local.pit.clear_elapsed();
         }
 
-        let system_millis = ctx.shared.system_time.lock(|timer| timer.add_micros((ticks as f32 * TICK_TO_US) as i32));
+        let system_millis = ctx
+            .shared
+            .system_time
+            .lock(|timer| timer.add_micros((ticks as f32 * TICK_TO_US) as i32));
 
         if system_millis - *ctx.local.loop_timer > 250 {
-
             *ctx.local.loop_timer = system_millis;
 
             let usb_state = ctx.shared.usb_state.lock(|s| *s);
@@ -220,11 +220,10 @@ mod app {
                 .lock(|report| match *report {
                     None => {
                         *report = Some(buffer);
-                    },
-                    Some(_) => {},
+                    }
+                    Some(_) => {}
                 });
         }
-        
     }
 
     #[task(binds = USB_OTG1, local = [usb_hid, usb_device, ptp_stamp], shared = [system_time, usb_state, system_status_report, system_config_report], priority = 1)]
@@ -235,68 +234,76 @@ mod app {
             ptp_stamp,
         } = ctx.local;
 
-        let mut usb_state = ctx.shared.usb_state.lock(|state| *state );
+        let mut usb_state = ctx.shared.usb_state.lock(|state| *state);
 
         // USB dev poll only in the interrupt handler
         usb_device.poll(&mut [usb_hid]);
 
         // Check if device is configured
         match usb_device.state() {
-            
             UsbDeviceState::Configured => {
-            
                 match usb_state {
                     // USB needs configuration
-                    SystemState::Dead => { 
+                    SystemState::Dead => {
                         usb_device.bus().configure();
                         usb_state = SystemState::Alive;
                     }
                     // USB is configured, try reading and writing
-                    _ => { 
+                    _ => {
                         // get bus timer elapsed
                         let elapsed = usb_device.bus().gpt_mut(GPT_INSTANCE, |gpt| {
-
                             let elapsed = gpt.is_elapsed();
-                            
+
                             while gpt.is_elapsed() {
                                 gpt.clear_elapsed();
                             }
-                            
+
                             elapsed
                         });
 
                         if elapsed {
+                            let millis = ctx.shared.system_time.lock(|timer| timer.millis());
 
                             // Try reading a report
                             let mut buffer = [0; RID_PACKET_SIZE];
 
                             usb_state = match usb_hid.pull_raw_output(&mut buffer).ok() {
-                            
                                 Some(64) => {
+                                    ctx.shared
+                                        .system_config_report
+                                        .lock(|report| match *report {
+                                            Some(_) => {}
+                                            None => {
+                                                *report = Some(buffer);
+                                            }
+                                        });
 
-                                    ctx.shared.system_config_report.lock(|report| { 
-                                        match *report {
-                                            Some(_) => {},
-                                            None => { *report = Some(buffer); }
-                                        }
-                                    });
-
-                                    let ptp_gain = ptp_stamp.client_read(&buffer, ctx.shared.system_time.lock(|timer| timer.millis()));
-                                    ctx.shared.system_time.lock(|timer| timer.add_micros(ptp_gain));
+                                    ptp_stamp.client_read(&buffer, millis);
 
                                     SystemState::Toggle
                                 }
                                 _ => SystemState::Alive,
                             };
 
-                            // write available system report
-                            let mut buffer = match ctx.shared.system_status_report.lock(|report| *report ) {
-                                Some(buffer) => buffer,
-                                None => [0u8; RID_PACKET_SIZE], // add match to check for other reports
-                            };
+                            let report = ctx.shared.system_config_report.lock(|report| {
+                                match *report {
+                                    Some(buffer) => {
+                                        *report = None; // clear this when we read the packet... kinda beat
+                                        Some(buffer)
+                                    }
+                                    None => Some([0u8; RID_PACKET_SIZE]),
+                                }
+                            });
 
-                            ptp_stamp.client_stamp(&mut buffer, ctx.shared.system_time.lock(|timer| timer.millis()));
-                            usb_hid.push_raw_input(&buffer).ok();
+                            if let Some(mut buffer) = report {
+                                let ticks =
+                                    usb_device.bus().gpt_mut(GPT_INSTANCE, |gpt| gpt.load());
+                                ptp_stamp.client_stamp(
+                                    &mut buffer,
+                                    millis + (ticks as f32 * TICK_TO_MS) as u32,
+                                );
+                                usb_hid.push_raw_input(&buffer).ok();
+                            }
                         }
                     }
                 }
@@ -304,6 +311,8 @@ mod app {
             _ => usb_state = SystemState::Dead,
         };
 
-        ctx.shared.usb_state.lock(|state| { *state = usb_state; } );
+        ctx.shared.usb_state.lock(|state| {
+            *state = usb_state;
+        });
     }
 }

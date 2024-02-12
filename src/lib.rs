@@ -11,7 +11,7 @@
  *
  ********************************************************************************/
 //!
-//! 
+//!
 //!
 //! # Building
 //!
@@ -23,22 +23,25 @@
 //!
 //!
 
-
 #![no_std]
 // #![warn(missing_docs)]
 
 pub mod rid {}
 pub mod rt_tasks {}
 
-
 pub const PTP_DRIFT_GAIN: f32 = 1_000.0;
 
-
-pub fn led<const N: u8, P: teensy4_bsp::hal::iomuxc::gpio::Pin<N>>(gpio: &mut teensy4_bsp::hal::gpio::Port<N>, pin: P) -> teensy4_bsp::hal::gpio::Output<P> {
+pub fn led<const N: u8, P: teensy4_bsp::hal::iomuxc::gpio::Pin<N>>(
+    gpio: &mut teensy4_bsp::hal::gpio::Port<N>,
+    pin: P,
+) -> teensy4_bsp::hal::gpio::Output<P> {
     gpio.output(pin)
 }
 
-pub fn blink_status<const N: u8, P: teensy4_bsp::hal::iomuxc::gpio::Pin<N>>(led: &mut teensy4_bsp::hal::gpio::Output<P>, state: SystemState) {
+pub fn blink_status<const N: u8, P: teensy4_bsp::hal::iomuxc::gpio::Pin<N>>(
+    led: &mut teensy4_bsp::hal::gpio::Output<P>,
+    state: SystemState,
+) {
     match state {
         SystemState::Dead => led.clear(),
         SystemState::Alive => led.set(),
@@ -54,5 +57,3 @@ pub enum SystemState {
     Blink = 3,
     Toggle = 4,
 }
-
-
