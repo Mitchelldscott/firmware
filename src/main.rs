@@ -193,13 +193,13 @@ mod app {
             ctx.local.pit.clear_elapsed();
         }
 
-        let system_millis = ctx
+        let system_micros = ctx
             .shared
             .system_time
-            .lock(|timer| timer.add_micros((ticks as f32 * TICK_TO_US) as i32));
+            .lock(|timer| timer.add_micros((ticks as f32 * TICK_TO_US) as u32));
 
-        if system_millis - *ctx.local.loop_timer > 250 {
-            *ctx.local.loop_timer = system_millis;
+        if system_micros - *ctx.local.loop_timer > 250_000 {
+            *ctx.local.loop_timer = system_micros;
 
             let usb_state = ctx.shared.usb_state.lock(|s| *s);
             let system_state = ctx.shared.system_state.lock(|s| *s);
@@ -262,7 +262,7 @@ mod app {
                         });
 
                         if elapsed {
-                            let millis = ctx.shared.system_time.lock(|timer| timer.millis());
+                            let micros = ctx.shared.system_time.lock(|timer| timer.micros());
 
                             // Try reading a report
                             let mut buffer = [0; RID_PACKET_SIZE];
@@ -278,7 +278,7 @@ mod app {
                                             }
                                         });
 
-                                    ptp_stamp.client_read(&buffer, millis);
+                                    ptp_stamp.client_read(&buffer, micros);
 
                                     SystemState::Toggle
                                 }
@@ -300,7 +300,7 @@ mod app {
                                     usb_device.bus().gpt_mut(GPT_INSTANCE, |gpt| gpt.load());
                                 ptp_stamp.client_stamp(
                                     &mut buffer,
-                                    millis + (ticks as f32 * TICK_TO_MS) as u32,
+                                    micros + (ticks as f32 * TICK_TO_US) as u32,
                                 );
                                 usb_hid.push_raw_input(&buffer).ok();
                             }
