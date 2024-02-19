@@ -147,7 +147,7 @@ mod app {
         let usb_hid = HIDClass::new(bus, RticHidReport::desc(), 4);
         let usb_device = UsbDeviceBuilder::new(bus, VID_PID)
             .product(PRODUCT)
-            .device_class(2)
+            .device_class(0)
             .max_packet_size_0(64)
             .build();
 
@@ -282,7 +282,14 @@ mod app {
 
                                     SystemState::Toggle
                                 }
-                                _ => SystemState::Alive,
+                                _ => SystemState::Alive, // {
+                                    // if ptp_stamp[0] - micros > 2000 {
+                                    //     SystemState::Alive
+                                    // }
+                                    // else {
+                                    //     SystemState::Toggle
+                                    // }
+                                // }
                             };
 
                             let report = ctx.shared.system_config_report.lock(|report| {
