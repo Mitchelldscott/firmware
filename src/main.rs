@@ -50,6 +50,7 @@ mod app {
     use firmware::SystemState;
     use rid::{
         ptp::{Duration, TimeStamp},
+        RID_DEFAULT_VID, RID_DEFAULT_PID,
         RIDReport, RID_PACKET_SIZE, RID_CYCLE_TIME_US,
     };
 
@@ -65,8 +66,8 @@ mod app {
 
     /// Change me if you want to play with a full-speed USB device.
     const SPEED: Speed = Speed::High;
-    const VID_PID: UsbVidPid = UsbVidPid(0x1331, 0x0001);
     const PRODUCT: &str = "Dyse Industries RTIC Firmware";
+    const VID_PID: UsbVidPid = UsbVidPid(RID_DEFAULT_VID, RID_DEFAULT_PID);
 
     /// How frequently we push updates to usb host
     const GPT_UPDATE_INTERVAL_US: u32 = RID_CYCLE_TIME_US as u32;
@@ -155,7 +156,7 @@ mod app {
 
         (
             Shared {
-                system_time: Duration::default(),
+                system_time: Duration::new(0),
                 usb_state: SystemState::Dead,
                 rt_task_state: SystemState::Dead,
                 system_state: SystemState::Alive,
@@ -282,14 +283,7 @@ mod app {
 
                                     SystemState::Toggle
                                 }
-                                _ => SystemState::Alive, // {
-                                    // if ptp_stamp[0] - micros > 2000 {
-                                    //     SystemState::Alive
-                                    // }
-                                    // else {
-                                    //     SystemState::Toggle
-                                    // }
-                                // }
+                                _ => SystemState::Alive,
                             };
 
                             let report = ctx.shared.system_config_report.lock(|report| {
