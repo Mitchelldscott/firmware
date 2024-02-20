@@ -50,7 +50,7 @@ mod app {
     use firmware::SystemState;
     use rid::{
         ptp::{Duration, TimeStamp},
-        RIDReport, RID_PACKET_SIZE,
+        RIDReport, RID_PACKET_SIZE, RID_CYCLE_TIME_US,
     };
 
     #[gen_hid_descriptor(
@@ -69,7 +69,7 @@ mod app {
     const PRODUCT: &str = "Dyse Industries RTIC Firmware";
 
     /// How frequently we push updates to usb host
-    const GPT_UPDATE_INTERVAL_US: u32 = 1_000;
+    const GPT_UPDATE_INTERVAL_US: u32 = RID_CYCLE_TIME_US as u32;
     const GPT_INSTANCE: imxrt_usbd::gpt::Instance = imxrt_usbd::gpt::Instance::Gpt0;
 
     const TICK_TO_MS: f32 = 1_000.0 / board::PERCLK_FREQUENCY as f32;
@@ -148,7 +148,7 @@ mod app {
         let usb_device = UsbDeviceBuilder::new(bus, VID_PID)
             .product(PRODUCT)
             .device_class(0)
-            .max_packet_size_0(64)
+            .max_packet_size_0(RID_PACKET_SIZE as u8)
             .build();
 
         let ptp_stamp = TimeStamp::new(0, 0, 0, 0);
@@ -268,7 +268,7 @@ mod app {
                             let mut buffer = [0; RID_PACKET_SIZE];
 
                             usb_state = match usb_hid.pull_raw_output(&mut buffer).ok() {
-                                Some(64) => {
+                                Some(RID_PACKET_SIZE) => {
                                     ctx.shared
                                         .system_config_report
                                         .lock(|report| match *report {
