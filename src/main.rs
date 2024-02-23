@@ -47,11 +47,16 @@ mod app {
 
     use usbd_hid::{descriptor::generator_prelude::*, hid_class::HIDClass};
 
-    use firmware::SystemState;
+    use firmware::{
+        DigitalPins,
+        SystemState,
+        N_DIGITAL_OUTPUTS,
+    };
     use rid::{
         ptp::{Duration, TimeStamp},
         RID_DEFAULT_VID, RID_DEFAULT_PID,
         RIDReport, RID_PACKET_SIZE, RID_CYCLE_TIME_US,
+        RID_MODE_INDEX, RID_TOGL_INDEX,
     };
 
     #[gen_hid_descriptor(
@@ -85,16 +90,11 @@ mod app {
     /// of endpoints; we're not using all the endpoints in this example.
     static EP_STATE: EndpointState = EndpointState::max_endpoints();
 
-    // use core::{iter::Cycle, slice::Iter};
-
     type Bus = BusAdapter;
 
     #[shared]
     struct Shared {
         system_time: Duration,
-        usb_state: SystemState,
-        rt_task_state: SystemState,
-        system_state: SystemState,
         system_status_report: Option<RIDReport>,
         _rt_task_report: Option<RIDReport>,
         system_config_report: Option<RIDReport>,
@@ -102,9 +102,8 @@ mod app {
 
     #[local]
     struct Local {
-        builtin_led: bsp::hal::gpio::Output<bsp::pins::common::P13>,
-        system_led: bsp::hal::gpio::Output<bsp::pins::common::P2>,
-        rt_task_led: bsp::hal::gpio::Output<bsp::pins::common::P3>,
+        digital_pin_states: [SystemState; N_DIGITAL_OUTPUTS],
+        digital_pins: DigitalPins,
         usb_hid: HIDClass<'static, Bus>,
         usb_device: UsbDevice<'static, Bus>,
         pit: bsp::hal::pit::Pit<2>,
@@ -122,9 +121,7 @@ mod app {
             ..
         } = board::t41(ctx.device);
 
-        let builtin_led = firmware::led(&mut gpio2, pins.p13);
-        let system_led = firmware::led(&mut gpio4, pins.p2);
-        let rt_task_led = firmware::led(&mut gpio4, pins.p3);
+        let digital_pins = DigitalPins::new(&mut gpio2, &mut gpio4, pins);
 
         pit.set_interrupt_enable(true);
         pit.set_load_timer_value(PIT_DELAY_MS);
@@ -157,17 +154,13 @@ mod app {
         (
             Shared {
                 system_time: Duration::new(0),
-                usb_state: SystemState::Dead,
-                rt_task_state: SystemState::Dead,
-                system_state: SystemState::Alive,
                 system_status_report: None,
                 _rt_task_report: None,
                 system_config_report: None,
             },
             Local {
-                builtin_led,
-                system_led,
-                rt_task_led,
+                digital_pin_states: [SystemState::Standby; N_DIGITAL_OUTPUTS],
+                digital_pins,
                 usb_hid,
                 usb_device,
                 pit,
@@ -184,7 +177,7 @@ mod app {
         }
     }
 
-    #[task(binds = PIT, local = [builtin_led, system_led, rt_task_led, pit, loop_timer: u32 = 0], shared = [system_time, usb_state, rt_task_state, system_state, system_status_report], priority = 1)]
+    #[task(binds = PIT, local = [digital_pins, digital_pin_states, pit, loop_timer1: u32 = 0, loop_timer2: u32 = 0], shared = [system_time, system_status_report, system_config_report], priority = 1)]
     fn system_control(mut ctx: system_control::Context) {
         let mut ticks = 0;
 
@@ -199,43 +192,52 @@ mod app {
             .system_time
             .lock(|timer| timer.add_micros((ticks as f32 * TICK_TO_US) as u32));
 
-        if system_micros - *ctx.local.loop_timer > 250_000 {
-            *ctx.local.loop_timer = system_micros;
+        if system_micros - *ctx.local.loop_timer2 > 250_000 {
 
-            let usb_state = ctx.shared.usb_state.lock(|s| *s);
-            let system_state = ctx.shared.system_state.lock(|s| *s);
-            let rt_task_state = ctx.shared.rt_task_state.lock(|s| *s);
+            let mut buffer = [0u8; RID_PACKET_SIZE];
+            buffer[RID_MODE_INDEX] = 0x13;
+            buffer[RID_TOGL_INDEX] = 0x13;
 
-            firmware::blink_status(ctx.local.builtin_led, usb_state);
-            firmware::blink_status(ctx.local.system_led, system_state);
-            firmware::blink_status(ctx.local.rt_task_led, rt_task_state);
+            *ctx.local.loop_timer2 = system_micros;
 
-            let mut buffer = [0; RID_PACKET_SIZE];
-            buffer[0] = 0x13;
-            buffer[1] = usb_state as u8;
-            buffer[2] = system_state as u8;
-            buffer[3] = rt_task_state as u8;
+            ctx.local.digital_pin_states[1] = SystemState::Alive;
 
-            ctx.shared
+
+            if ctx.shared
                 .system_status_report
                 .lock(|report| match *report {
-                    None => {
-                        *report = Some(buffer);
-                    }
-                    Some(_) => {}
-                });
+                    None => { *report = Some(buffer); true },
+                    Some(_) => false,
+                }) {
+                    ctx.local.digital_pin_states[0] = SystemState::Toggle;
+                }
+        }
+
+        if system_micros - *ctx.local.loop_timer1 > 1_000 {
+
+            *ctx.local.loop_timer1 = system_micros;
+
+            if let Some(buffer) = ctx.shared.system_config_report.lock(|report| *report) {
+
+                ctx.local.digital_pin_states[2] = SystemState::Alive;
+            
+            }
+        
+            ctx.local.digital_pins.write(*ctx.local.digital_pin_states);
+
+            *ctx.local.digital_pin_states = [SystemState::Standby; N_DIGITAL_OUTPUTS];
+
         }
     }
 
-    #[task(binds = USB_OTG1, local = [usb_hid, usb_device, ptp_stamp], shared = [system_time, usb_state, system_status_report, system_config_report], priority = 1)]
+    #[task(binds = USB_OTG1, local = [usb_hid, usb_device, ptp_stamp, configured: bool = false], shared = [system_time, system_status_report, system_config_report], priority = 1)]
     fn usb1(mut ctx: usb1::Context) {
         let usb1::LocalResources {
             usb_hid,
             usb_device,
             ptp_stamp,
+            configured,
         } = ctx.local;
-
-        let mut usb_state = ctx.shared.usb_state.lock(|state| *state);
 
         // USB dev poll only in the interrupt handler
         usb_device.poll(&mut [usb_hid]);
@@ -243,11 +245,11 @@ mod app {
         // Check if device is configured
         match usb_device.state() {
             UsbDeviceState::Configured => {
-                match usb_state {
+                match configured {
                     // USB needs configuration
-                    SystemState::Dead => {
+                    false => {
                         usb_device.bus().configure();
-                        usb_state = SystemState::Alive;
+                        *configured = true;
                     }
                     // USB is configured, try reading and writing
                     _ => {
@@ -268,7 +270,7 @@ mod app {
                             // Try reading a report
                             let mut buffer = [0; RID_PACKET_SIZE];
 
-                            usb_state = match usb_hid.pull_raw_output(&mut buffer).ok() {
+                            match usb_hid.pull_raw_output(&mut buffer).ok() {
                                 Some(RID_PACKET_SIZE) => {
                                     ctx.shared
                                         .system_config_report
@@ -281,39 +283,34 @@ mod app {
 
                                     ptp_stamp.client_read(&buffer, micros);
 
-                                    SystemState::Toggle
-                                }
-                                _ => SystemState::Alive,
-                            };
+                                    let report = ctx.shared.system_status_report.lock(|report| {
+                                        match *report {
+                                            Some(buffer) => {
+                                                *report = None; // clear this when we read the packet... kinda beat
+                                                Some(buffer)
+                                            }
+                                            None => Some([0u8; RID_PACKET_SIZE]),
+                                        }
+                                    });
 
-                            let report = ctx.shared.system_config_report.lock(|report| {
-                                match *report {
-                                    Some(buffer) => {
-                                        *report = None; // clear this when we read the packet... kinda beat
-                                        Some(buffer)
+                                    if let Some(mut buffer) = report {
+                                        let ticks =
+                                            usb_device.bus().gpt_mut(GPT_INSTANCE, |gpt| gpt.load());
+                                        ptp_stamp.client_stamp(
+                                            &mut buffer,
+                                            micros + (ticks as f32 * TICK_TO_US) as u32,
+                                        );
+                                        usb_hid.push_raw_input(&buffer).ok();
                                     }
-                                    None => Some([0u8; RID_PACKET_SIZE]),
-                                }
-                            });
 
-                            if let Some(mut buffer) = report {
-                                let ticks =
-                                    usb_device.bus().gpt_mut(GPT_INSTANCE, |gpt| gpt.load());
-                                ptp_stamp.client_stamp(
-                                    &mut buffer,
-                                    micros + (ticks as f32 * TICK_TO_US) as u32,
-                                );
-                                usb_hid.push_raw_input(&buffer).ok();
+                                }
+                                _ => {},
                             }
                         }
                     }
                 }
             }
-            _ => usb_state = SystemState::Dead,
+            _ => {},
         };
-
-        ctx.shared.usb_state.lock(|state| {
-            *state = usb_state;
-        });
     }
 }
